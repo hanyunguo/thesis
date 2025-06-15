@@ -63,7 +63,7 @@ def main():
         num_proc=1
     )
 
-    block_size = 2048
+    block_size = 1024
     def group_texts(examples):
         concatenated = list(itertools.chain.from_iterable(examples["input_ids"]))
         total_length = (len(concatenated) // block_size) * block_size
