@@ -219,7 +219,7 @@ def main():
         logging_steps=500,
         save_steps=1000,
         save_total_limit=1,
-        num_train_epochs=3,
+        num_train_epochs=1,
         learning_rate = 5e-5,
         weight_decay=0.01,
         warmup_steps=100,
@@ -258,7 +258,7 @@ def main():
     print(">>> eval_loss:", eval_result["eval_loss"])
     print(">>> perplexity:", math.exp(eval_result["eval_loss"]))
     print(">>> ROUGE:", eval_result)
-
+    trainer.save_model("./memory_fuse_epoch1")
 
 if __name__ == "__main__":
     main()
