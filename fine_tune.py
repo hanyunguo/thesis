@@ -143,12 +143,12 @@ def main():
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
-        generation_max_length=512,
+        generation_max_length=256,
         do_train=True,
         do_eval=True,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
-        logging_steps=500,
+        logging_steps=100,
         save_steps=1000,
         save_total_limit=1,
         num_train_epochs=1,
@@ -156,8 +156,8 @@ def main():
         weight_decay=0.01,
         gradient_checkpointing=True,
         warmup_steps=100,
-        predict_with_generate=True,
-        fp16=False,
+        predict_with_generate=False,
+        fp16=True,
         push_to_hub=False,
         save_safetensors=False,
     )

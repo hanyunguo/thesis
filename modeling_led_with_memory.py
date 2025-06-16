@@ -9,7 +9,7 @@ from transformers.models.led.modeling_led import (
 )
 from transformers.models.led.modeling_led import LEDLearnedPositionalEmbedding
 from transformers import LEDConfig
-from memory_module import MemoryFuse
+from memory_module import MemoryFuse  # 请确保这个模块无误
 
 class LEDEncoderLayerWithMemory(LEDEncoderLayer):
     def __init__(self, config: LEDConfig, layer_id=0, enable_memory=False):
@@ -20,10 +20,7 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
         self.my_norm2 = nn.LayerNorm(config.d_model)
         self.linear1 = nn.Linear(config.d_model, config.encoder_ffn_dim)
         self.linear2 = nn.Linear(config.encoder_ffn_dim, config.d_model)
-        if hasattr(config, 'activation_function') and config.activation_function == "gelu":
-            self.activation_fn = torch.nn.GELU()
-        else:
-            self.activation_fn = torch.nn.ReLU()
+        self.activation_fn = torch.nn.GELU() if getattr(config, 'activation_function', '') == 'gelu' else torch.nn.ReLU()
         if self.enable_memory:
             self.memory_fuse = MemoryFuse(config.d_model, memory_size=128)
 
@@ -40,7 +37,7 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
         is_global_attn_flag = is_global_attn.any().item() if isinstance(is_global_attn, torch.Tensor) else bool(is_global_attn)
 
         if isinstance(is_index_global_attn, bool):
-            raise ValueError("`is_index_global_attn` should be a BoolTensor, not a bool.")
+            raise ValueError("`is_index_global_attn` 应为 BoolTensor，而不是 bool。")
 
         self_attn_outputs = self.self_attn(
             hidden_states=hidden_states,
@@ -51,8 +48,7 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
             is_global_attn=is_global_attn_flag,
             output_attentions=output_attentions,
         )
-        residual = hidden_states  # 记录原始输入
-
+        residual = hidden_states
         attn_output = self_attn_outputs[0]
 
         if self.enable_memory:
@@ -81,9 +77,7 @@ class LEDModelWithMemory(LEDModel):
         super().__init__(config)
         self.encoder = LEDEncoderWithMemory(config)
 
-    def _wrap_encoder_layer_forward(self, layer):
-        original_forward = layer.forward
-
+    def _wrap_encoder_layer_forward(self, layer, original_forward):
         def wrapped_forward(
             hidden_states,
             attention_mask,
@@ -102,7 +96,6 @@ class LEDModelWithMemory(LEDModel):
                 self._is_index_global_attn,
                 output_attentions,
             )
-
         return wrapped_forward
 
     def forward(
@@ -130,8 +123,13 @@ class LEDModelWithMemory(LEDModel):
 
         self._is_index_global_attn = is_index_global_attn
         self._is_global_attn = is_global_attn
+
+        # ✅ 防止重复包装
         for layer in self.encoder.layers:
-            layer.forward = self._wrap_encoder_layer_forward(layer)
+            if not hasattr(layer, "_is_wrapped"):
+                original_forward = layer.forward
+                layer.forward = self._wrap_encoder_layer_forward(layer, original_forward)
+                layer._is_wrapped = True
 
         return super().forward(
             input_ids=input_ids,
@@ -168,7 +166,6 @@ class LEDForConditionalGenerationWithMemory(LEDPreTrainedModel):
         return_dict=True,
         **kwargs
     ):
-        # Safety check: Ensure no token exceeds vocab size
         if input_ids is not None:
             max_token_id = input_ids.max().item()
             if max_token_id >= self.config.vocab_size:
