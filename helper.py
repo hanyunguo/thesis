@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoConfig, LongformerTokenizerFast
-from modeling_longformer_with_memory import LongformerForMaskedLMWithMemory
+from modeling_led_with_memory import LongformerForMaskedLMWithMemory
 
 def print_parameter_status(model):
     print("\n>>> 模型参数状态（True 表示会被训练）:")
