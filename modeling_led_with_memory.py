@@ -51,13 +51,15 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
             is_global_attn=is_global_attn_flag,
             output_attentions=output_attentions,
         )
+        residual = hidden_states  # 记录原始输入
+
         attn_output = self_attn_outputs[0]
 
         if self.enable_memory:
             attn_output = self.memory_fuse(attn_output)
 
-        hidden_states = self.my_dropout(attn_output)
-        hidden_states = self.my_norm1(hidden_states + attn_output)
+        attn_output = self.my_dropout(attn_output)
+        hidden_states = self.my_norm1(residual + attn_output)
 
         ff_output = self.linear2(self.my_dropout(self.activation_fn(self.linear1(hidden_states))))
         ff_output = self.my_dropout(ff_output)
@@ -150,21 +152,10 @@ class LEDForConditionalGenerationWithMemory(LEDPreTrainedModel):
     def __init__(self, config: LEDConfig):
         super().__init__(config)
         self.model = LEDModelWithMemory(config)
-        self.model.config.decoder_max_position_embeddings = 4096
-        self.model.decoder.embed_positions = LEDLearnedPositionalEmbedding(
-            self.model.config.decoder_max_position_embeddings,
-            self.model.config.d_model
-        )
-        self.model.decoder.embed_positions.weight.data.normal_(
-            mean=0.0,
-            std=self.model.config.initializer_range
-        )
+        self.model.config.decoder_max_position_embeddings = 512
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head.weight = self.model.shared.weight
         self.post_init()
-
-        # Debugging additions
-        print("🧠 vocab_size from config:", config.vocab_size)
 
     def forward(
         self,

@@ -85,13 +85,11 @@ def preprocess_function(examples):
         )
 
     model_inputs["labels"] = labels["input_ids"]
-    model_inputs["decoder_input_ids"] = labels["input_ids"]  # ✅ 让 decoder 只看到 512 个 token
+    model_inputs["decoder_input_ids"] = labels["input_ids"]
     model_inputs["global_attention_mask"] = [
         [1] + [0] * (len(input_id) - 1) for input_id in model_inputs["input_ids"]
     ]
-
     return model_inputs
-
 
 def is_checkpoint_compatible(checkpoint_path, tokenizer, model):
     try:
@@ -108,7 +106,6 @@ def is_checkpoint_compatible(checkpoint_path, tokenizer, model):
 
 def resolve_checkpoint(output_dir, tokenizer, model):
     from transformers.trainer_utils import get_last_checkpoint
-
     if not os.path.isdir(output_dir):
         return None
     checkpoint = get_last_checkpoint(output_dir)
@@ -126,7 +123,7 @@ def main():
     args = parser.parse_args()
 
     model_name = "allenai/PRIMERA-multinews"
-    output_dir = "./led-memory-output"
+    output_dir = "./led-memory-freeze10-output"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     global tokenizer
@@ -134,6 +131,19 @@ def main():
     rouge = load_metric("rouge")
 
     model = LEDForConditionalGenerationWithMemory.from_pretrained(model_name).to(device)
+
+    # ✅ 冻结 encoder 前10层
+    print("🚧 Freezing encoder 前10层参数...")
+    for i, layer in enumerate(model.model.encoder.layers):
+        if i < 10:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+    # ✅ 显示可训练参数比例
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"🧮 Trainable parameters: {trainable} / {total} ({100 * trainable / total:.2f}%)")
+
     model.gradient_checkpointing_enable()
     model.config.max_length = 512
     model.config.decoder_max_position_embeddings = 512 
@@ -187,7 +197,7 @@ def main():
     print(">>> eval_loss:", eval_result["eval_loss"])
     print(">>> perplexity:", math.exp(eval_result["eval_loss"]))
     print(">>> ROUGE:", eval_result)
-    trainer.save_model("./memory_fuse_epoch1")
+    trainer.save_model("./memory_fuse_freeze10_epoch1")
 
 if __name__ == "__main__":
     main()
