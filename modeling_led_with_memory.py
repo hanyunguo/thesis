@@ -9,8 +9,12 @@ from transformers.models.led.modeling_led import (
 )
 from transformers.models.led.modeling_led import LEDLearnedPositionalEmbedding
 from transformers import LEDConfig
-from memory_module import MemoryFuse  # 请确保这个模块无误
+from memory_module import MemoryFuse
 
+
+# ------------------------
+# Encoder Layer with Memory
+# ------------------------
 class LEDEncoderLayerWithMemory(LEDEncoderLayer):
     def __init__(self, config: LEDConfig, layer_id=0, enable_memory=False):
         super().__init__(config, layer_id)
@@ -34,10 +38,18 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
         is_index_global_attn=None,
         output_attentions=False,
     ):
-        is_global_attn_flag = is_global_attn.any().item() if isinstance(is_global_attn, torch.Tensor) else bool(is_global_attn)
+        if isinstance(is_index_global_attn, bool) or is_index_global_attn is None:
+            is_index_global_attn = torch.zeros_like(hidden_states[:, :, 0], dtype=torch.bool)
+        if isinstance(is_global_attn, bool) or is_global_attn is None:
+            is_global_attn = torch.zeros(hidden_states.size(0), dtype=torch.bool, device=hidden_states.device)
 
-        if isinstance(is_index_global_attn, bool):
-            raise ValueError("`is_index_global_attn` 应为 BoolTensor，而不是 bool。")
+        is_index_global_attn_nonzero = is_index_global_attn.nonzero(as_tuple=True)
+        if len(is_index_global_attn_nonzero[0]) == 0:
+            # 避免进入 LED 自带 global attention 的 reshape 逻辑
+            is_index_global_attn = torch.zeros_like(hidden_states[:, :, 0], dtype=torch.bool)
+            is_global_attn = torch.zeros(hidden_states.size(0), dtype=torch.bool, device=hidden_states.device)
+
+        is_global_attn_flag = is_global_attn.any().item()
 
         self_attn_outputs = self.self_attn(
             hidden_states=hidden_states,
@@ -48,6 +60,7 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
             is_global_attn=is_global_attn_flag,
             output_attentions=output_attentions,
         )
+
         residual = hidden_states
         attn_output = self_attn_outputs[0]
 
@@ -64,6 +77,10 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
         outputs = (hidden_states,) + self_attn_outputs[1:]
         return outputs
 
+
+# ------------------------
+# Encoder with Memory
+# ------------------------
 class LEDEncoderWithMemory(LEDEncoder):
     def __init__(self, config: LEDConfig):
         super().__init__(config)
@@ -72,31 +89,14 @@ class LEDEncoderWithMemory(LEDEncoder):
             for i in range(config.encoder_layers)
         )
 
+
+# ------------------------
+# LED Model with Memory
+# ------------------------
 class LEDModelWithMemory(LEDModel):
     def __init__(self, config: LEDConfig):
         super().__init__(config)
         self.encoder = LEDEncoderWithMemory(config)
-
-    def _wrap_encoder_layer_forward(self, layer, original_forward):
-        def wrapped_forward(
-            hidden_states,
-            attention_mask,
-            layer_head_mask,
-            is_global_attn,
-            is_index_masked,
-            is_index_global_attn,
-            output_attentions,
-        ):
-            return original_forward(
-                hidden_states,
-                attention_mask,
-                layer_head_mask,
-                self._is_global_attn,
-                is_index_masked,
-                self._is_index_global_attn,
-                output_attentions,
-            )
-        return wrapped_forward
 
     def forward(
         self,
@@ -118,22 +118,10 @@ class LEDModelWithMemory(LEDModel):
             global_attention_mask = torch.zeros_like(input_ids)
             global_attention_mask[:, 0] = 1
 
-        is_index_global_attn = global_attention_mask.bool()
-        is_global_attn = is_index_global_attn.any(dim=1)
-
-        self._is_index_global_attn = is_index_global_attn
-        self._is_global_attn = is_global_attn
-
-        # ✅ 防止重复包装
-        for layer in self.encoder.layers:
-            if not hasattr(layer, "_is_wrapped"):
-                original_forward = layer.forward
-                layer.forward = self._wrap_encoder_layer_forward(layer, original_forward)
-                layer._is_wrapped = True
-
         return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            global_attention_mask=global_attention_mask,
             decoder_input_ids=decoder_input_ids,
             decoder_attention_mask=decoder_attention_mask,
             encoder_outputs=encoder_outputs,
@@ -146,11 +134,14 @@ class LEDModelWithMemory(LEDModel):
             return_dict=return_dict,
         )
 
+
+# ------------------------
+# LED for Conditional Generation with Memory
+# ------------------------
 class LEDForConditionalGenerationWithMemory(LEDPreTrainedModel):
     def __init__(self, config: LEDConfig):
         super().__init__(config)
         self.model = LEDModelWithMemory(config)
-        self.model.config.decoder_max_position_embeddings = 512
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head.weight = self.model.shared.weight
         self.post_init()
@@ -166,10 +157,10 @@ class LEDForConditionalGenerationWithMemory(LEDPreTrainedModel):
         return_dict=True,
         **kwargs
     ):
-        if input_ids is not None:
+        if input_ids is not None and self.training:
             max_token_id = input_ids.max().item()
             if max_token_id >= self.config.vocab_size:
-                print(f"🚨 Token ID 超出范围：max_token_id={max_token_id}, vocab_size={self.config.vocab_size}")
+                print(f"\uD83D\uDEA8 Token ID 超出范围：max_token_id={max_token_id}, vocab_size={self.config.vocab_size}")
 
         outputs = self.model(
             input_ids=input_ids,
