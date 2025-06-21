@@ -7,11 +7,22 @@ import torch
 import numpy as np
 from datasets import load_dataset
 from evaluate import load as load_metric
-from transformers import LEDTokenizerFast, Seq2SeqTrainer, Seq2SeqTrainingArguments
-from modeling_led_with_memory import LEDForConditionalGenerationWithMemory
+from transformers import (
+    LEDTokenizerFast, 
+    Seq2SeqTrainer, 
+    Seq2SeqTrainingArguments,
+    AutoConfig,
+    AutoModelForSeq2SeqLM
+)
+from transformers.models.led.configuration_led import LEDConfig
+from modeling_led_with_memory import LEDForConditionalGenerationWithMemory, LogProgressCallback
 from tqdm import tqdm
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    filename='run.log',
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+)
 
 def evaluate_on_gpu(model, dataloader, tokenizer, rouge):
     model.eval()
@@ -91,30 +102,14 @@ def preprocess_function(examples):
     ]
     return model_inputs
 
-def is_checkpoint_compatible(checkpoint_path, tokenizer, model):
-    try:
-        dummy = tokenizer("Hello world", return_tensors="pt", max_length=64, truncation=True, padding="max_length")
-        dummy["global_attention_mask"] = torch.tensor([[1] + [0] * (dummy["input_ids"].shape[1] - 1)])
-        dummy = {k: v.to(model.device) for k, v in dummy.items()}
-        model.eval()
-        with torch.no_grad():
-            _ = model.generate(**dummy, max_length=32)
-        return True
-    except Exception as e:
-        print(f"Checkpoint incompatible: {e}")
-        return False
-
 def resolve_checkpoint(output_dir, tokenizer, model):
     from transformers.trainer_utils import get_last_checkpoint
     if not os.path.isdir(output_dir):
         return None
     checkpoint = get_last_checkpoint(output_dir)
-    if checkpoint and is_checkpoint_compatible(checkpoint, tokenizer, model):
-        print(f"✅ Resuming from checkpoint: {checkpoint}")
+    if checkpoint:
+        print(f"Resuming from checkpoint: {checkpoint}")
         return checkpoint
-    elif checkpoint:
-        print(f"⚠️  Deleting incompatible checkpoint: {checkpoint}")
-        shutil.rmtree(checkpoint)
     return None
 
 def main():
@@ -132,17 +127,17 @@ def main():
 
     model = LEDForConditionalGenerationWithMemory.from_pretrained(model_name).to(device)
 
-    # ✅ 冻结 encoder 前10层
-    print("🚧 Freezing encoder 前10层参数...")
+    # 冻结 encoder 前10层
+    print("Freezing encoder 前10层参数...")
     for i, layer in enumerate(model.model.encoder.layers):
         if i < 10:
             for param in layer.parameters():
                 param.requires_grad = False
 
-    # ✅ 显示可训练参数比例
+    # 显示可训练参数比例
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    print(f"🧮 Trainable parameters: {trainable} / {total} ({100 * trainable / total:.2f}%)")
+    print(f"Trainable parameters: {trainable} / {total} ({100 * trainable / total:.2f}%)")
 
     model.gradient_checkpointing_enable()
     model.config.max_length = 512
@@ -159,7 +154,7 @@ def main():
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         logging_steps=100,
-        save_steps=1000,
+        save_steps=500,
         save_total_limit=1,
         num_train_epochs=1,
         learning_rate=5e-5,
@@ -186,6 +181,7 @@ def main():
         eval_dataset=tokenized["validation"],
         tokenizer=tokenizer,
         compute_metrics=build_compute_metrics(tokenizer, rouge),
+        callbacks=[LogProgressCallback()],
     )
 
     trainer.train(resume_from_checkpoint=checkpoint)

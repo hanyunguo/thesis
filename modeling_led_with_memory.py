@@ -10,6 +10,19 @@ from transformers.models.led.modeling_led import (
 from transformers.models.led.modeling_led import LEDLearnedPositionalEmbedding
 from transformers import LEDConfig
 from memory_module import MemoryFuse
+from transformers import TrainerCallback
+import time
+
+
+# ------------------------
+# Callback for Logging
+# ------------------------
+class LogProgressCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is not None:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            with open("training_progress.csv", "a") as f:
+                f.write(f"{timestamp},{state.global_step},{logs.get('loss', 'NA')},{logs.get('eval_loss', 'NA')},{logs.get('learning_rate', 'NA')}\n")
 
 
 # ------------------------
@@ -45,7 +58,6 @@ class LEDEncoderLayerWithMemory(LEDEncoderLayer):
 
         is_index_global_attn_nonzero = is_index_global_attn.nonzero(as_tuple=True)
         if len(is_index_global_attn_nonzero[0]) == 0:
-            # 避免进入 LED 自带 global attention 的 reshape 逻辑
             is_index_global_attn = torch.zeros_like(hidden_states[:, :, 0], dtype=torch.bool)
             is_global_attn = torch.zeros(hidden_states.size(0), dtype=torch.bool, device=hidden_states.device)
 
@@ -160,7 +172,7 @@ class LEDForConditionalGenerationWithMemory(LEDPreTrainedModel):
         if input_ids is not None and self.training:
             max_token_id = input_ids.max().item()
             if max_token_id >= self.config.vocab_size:
-                print(f"\uD83D\uDEA8 Token ID 超出范围：max_token_id={max_token_id}, vocab_size={self.config.vocab_size}")
+                print(f"🚨 Token ID 超出范围：max_token_id={max_token_id}, vocab_size={self.config.vocab_size}")
 
         outputs = self.model(
             input_ids=input_ids,
